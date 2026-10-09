@@ -1,0 +1,11 @@
+{
+  "name": "@abcc/publish-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ABCC 资源发布 / 更新流程（无界面），供 abcc CLI 使用；底层规则直接复用 app/logic/publish",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  }
+}

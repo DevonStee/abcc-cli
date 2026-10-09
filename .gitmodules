@@ -1,0 +1,4 @@
+[submodule "vendor/AstroBoxCreatorConsole"]
+	path = vendor/AstroBoxCreatorConsole
+	url = https://github.com/DevonStee/AstroBoxCreatorConsole.git
+	branch = cli-support

@@ -1,0 +1,7 @@
+[install]
+# 扁平 node_modules：原项目代码直接引用了传递依赖，Bun 1.3 对 workspace 默认的 isolated 布局会解析失败。
+linker = "hoisted"
+
+[test]
+# 只跑本仓库的测试，不扫描 vendor/ 里原项目的测试
+root = "tests"

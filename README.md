@@ -107,7 +107,7 @@ packages/publish-core/           @abcc/publish-core：发布 / 更新流程，�
   src/pipeline.ts                新建与更新共用：付费保护、写表盘 ID、加密、单次提交、上报密钥
   src/publish.ts                 新建发布
   src/update.ts                  更新已上架资源
-  src/client-info.ts             request.json 的 client 信息（abcc-cli@版本）
+  src/client-info.ts             request.json 的 client 信息：abcc-cli@版本 (ABCC 版本)，及所用 ABCC 代码的提交
 cli/
   index.ts                       参数解析与分发
   commands/                      auth / validate / publish / update / status

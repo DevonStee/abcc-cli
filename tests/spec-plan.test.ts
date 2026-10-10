@@ -115,6 +115,7 @@ describe("发布计划与 manifest", () => {
 
   test("加密 + 付费映射时开启 creator features", async () => {
     const spec = baseSpec({
+      paidType: "paid",
       downloads: [{ devices: ["xmb10"], file: "band.bin", encrypt: true }],
       pricing: { afdian: ["https://afdian.com/order/create?plan_id=p1&sku=%5B%5D"], devices: "all" },
     });
@@ -162,6 +163,7 @@ describe("加密但免费", () => {
 
   test("与 pricing 同时出现时报错", async () => {
     const spec = baseSpec({
+      paidType: "paid",
       downloads: [{ devices: ["xmb10"], file: "band.bin", encrypt: true }],
       pricing: { afdian: ["https://afdian.com/x?plan_id=p&sku=%5B%5D"], devices: "all" },
       allowFreeEncryption: true,

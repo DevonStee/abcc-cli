@@ -57,13 +57,16 @@ AstroBox 登录需要占用 6767 端口，请先关闭本机占用该端口的 A
   "downloads": [
     { "devices": ["xmb10", "xmb10nfc", "xmb11", "xmb11nfc"], "file": "band.bin", "encrypt": true }
   ],
-  "pricing": { "afdian": ["<爱发电购买链接>"], "devices": "all" }
+  "pricing": { "afdian": ["<爱发电购买链接>"], "devices": "all" },
+  "paidType": "force_paid"
 }
 ```
 
 - `author` 不需要填写，取自登录的 AstroBox 账号。
 - 哪个包对应哪些设备由创作者决定，CLI 只校验设备 ID 是否存在。
-- 只要有一组开启了加密，就必须配置 `pricing`。CLI 会先保存爱发电映射，并用 GUI 同一套规则复核，确认后才上传、上报密钥。
+- `encrypt` 不写默认加密，只有明确写 `false` 才上传明文包。
+- 新建时有加密的组，必须配置 `pricing` 或 `allowFreeEncryption`。CLI 会先保存爱发电映射，并用 GUI 同一套规则复核，确认后才上传、上报密钥。
+- 付费表盘必须明确写 `paidType`：`"paid"`（付费：可先体验部分功能，购买后解锁）或 `"force_paid"`（强制付费：不购买无法使用），CLI 不替创作者默认。付费表盘的全部设备都必须加密。
 - 「加密但免费」需要显式写 `"allowFreeEncryption": true`：包体在仓库里是密文、只能通过 AstroBox 安装，密钥向所有用户免费发放。
 
 ## 更新已上架资源（abcc update）
@@ -77,6 +80,7 @@ AstroBox 登录需要占用 6767 端口，请先关闭本机占用该端口的 A
   - 末位已到 255 时不自动进位，要求手动写 `version`。
   新增的设备没有线上版本，按包体版本走。原文件不会被修改。
 - `"keep": true` 的组沿用线上包体（不写 `file`），不上传、不改版本。
+- **加密只进不退**：线上已加密的设备，换包后必须继续加密。付费表盘更新时必须重新写明 `paidType`；「付费必须加密」按最终提交的付费类型检查（没写 `pricing` 也算）。
 - 资源仓库沿用原仓库，单次提交 `update: <名称>`；加密包体用新密钥加密并按新 commit 上报。
 - 该资源已有**自己开着的 PR** 时，在原 PR 分支上更新 `resource.csv` / `request.json`（GUI 的「继续编辑」）；否则新建 `[ABCC] Update resource: <名称>`，`request.json` 为 `mode: edit`。别人开着的 PR 会直接拦下。
 - 加密设备在更新仓库前用 `checkUnpaidEncryption` 复核付费映射，未配置时中止。

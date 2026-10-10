@@ -29,7 +29,15 @@ import {
 import { validateWatchfaceIdFormat } from "~/logic/publish/watchface-id";
 import type { DeviceOption } from "~/logic/devices/catalog";
 import { readImageSize } from "./images";
-import { hasEncryption, pricingDevices, type LoadedSpec, type SpecDownloadGroup } from "./spec";
+import {
+    hasEncryption,
+    isPaidType,
+    PAID_TYPE_CHOICE_HINT,
+    pricingDevices,
+    type LoadedSpec,
+    type ResourceSpec,
+    type SpecDownloadGroup,
+} from "./spec";
 import {
     decidePackageVersion,
     rewritePackageVersion,
@@ -74,6 +82,14 @@ export interface PublishedBaseline {
     links: Array<{ title?: string; url?: string; icon?: string }>;
     /** 服务端登记过密钥的设备（GUI 同样以此判定旧行是否加密）。 */
     encryptedDevices: Set<string>;
+    /** 目录里登记的付费类型（index_v2.csv 的 paid_type）。 */
+    paidType?: string;
+}
+
+/** 最终提交的付费类型：abcc.json 写了用它，更新时没写就沿用线上（与提交 PR 时一致）。 */
+export function effectivePaidType(spec: ResourceSpec, baseline: PublishedBaseline | undefined): string {
+    if (spec.specified.paidType || !baseline) return spec.paidType;
+    return baseline.paidType?.trim() ?? "";
 }
 
 export interface ResourcePlan {
@@ -341,23 +357,37 @@ export async function buildPlan(
         if (idError && !problems.includes(idError)) problems.push(idError);
     }
 
-    if (hasEncryption(spec) && !spec.pricing && !spec.allowFreeEncryption && !baseline) {
+    const paidType = effectivePaidType(spec, baseline);
+    const paid = isPaidType(paidType);
+    // 付费类型（paid / force_paid）由创作者决定：更新付费表盘时也要在 abcc.json 里明确写出。
+    if (paid && !spec.specified.paidType) {
+        problems.push(`线上是付费表盘（${paidType}）。${PAID_TYPE_CHOICE_HINT}`);
+    }
+    if (paid && !spec.pricing && !baseline) {
+        problems.push(`paidType 为 ${paidType}，但没有配置 pricing（爱发电购买链接）`);
+    }
+    if (hasEncryption(spec) && !spec.pricing && !spec.allowFreeEncryption && !paid && !baseline) {
         problems.push(
             "有设备开启了加密，但没有配置 pricing。没有付费映射时服务端会把密钥当作免费资源发放，任何人都能下载。" +
                 "如果这正是你要的「加密但免费」，请在 abcc.json 中写明 \"allowFreeEncryption\": true",
         );
     }
-    // 免费表盘可加密可不加密；付费表盘必须加密，否则包体在仓库里是明文，谁都能直接下载安装。
+    // 付费表盘必须加密，否则包体在仓库里是明文，谁都能直接下载安装。
     const encryptedRowDevices = new Set(
         downloadRows.filter((row) => row.encryptOnUpload).map((row) => row.platformId),
     );
-    const paidDevices =
-        spec.paidType === "paid" || spec.paidType === "force_paid"
-            ? downloadRows.map((row) => row.platformId)
-            : pricingDevices(spec);
+    const paidDevices = paid ? downloadRows.map((row) => row.platformId) : pricingDevices(spec);
     const plainPaid = paidDevices.filter((device) => !encryptedRowDevices.has(device));
     if (plainPaid.length > 0) {
         problems.push(`付费表盘必须加密，以下设备未开启 encrypt：${plainPaid.join(", ")}`);
+    }
+    // 线上已加密的设备，换包后也必须加密，不退回明文。
+    const downgraded = packages
+        .filter((pkg) => !pkg.encrypt)
+        .flatMap((pkg) => pkg.devices)
+        .filter((device) => baseline?.encryptedDevices.has(device));
+    if (downgraded.length > 0) {
+        problems.push(`以下设备线上是加密的，新包也必须加密（不要写 encrypt: false）：${downgraded.join(", ")}`);
     }
     if (spec.pricing && spec.allowFreeEncryption) {
         problems.push("配置了 pricing 时不需要 allowFreeEncryption，请删除其中一个");

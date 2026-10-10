@@ -16,6 +16,15 @@ export const SUPPORTED_PACKAGE_EXTENSIONS = [".bin", ".face"] as const;
 export const PAID_TYPES = ["", "free", "paid", "force_paid"] as const;
 export type PaidType = (typeof PAID_TYPES)[number];
 
+/** 付费表盘未明确付费类型时的提示，含 GUI「付费类型」的官方说明。 */
+export const PAID_TYPE_CHOICE_HINT =
+    '付费表盘请在 paidType 中明确选择："paid"（付费：可先体验部分功能，购买后解锁完整功能）' +
+    '或 "force_paid"（强制付费：不购买则无法使用）。由创作者决定，不要代选';
+
+export function isPaidType(value: string | undefined): boolean {
+    return value === "paid" || value === "force_paid";
+}
+
 export interface SpecLink {
     title: string;
     url: string;
@@ -26,6 +35,7 @@ export interface SpecDownloadGroup {
     devices: string[];
     /** keep 为 true 时为空：沿用线上已发布的包体。 */
     file: string;
+    /** 默认 true；只有 abcc.json 明确写 false 才不加密。 */
     encrypt: boolean;
     /** 仅更新时可用：这组设备沿用线上包体，不上传新包，也不改版本。 */
     keep: boolean;
@@ -172,7 +182,8 @@ export function parseSpec(dir: string, raw: Record<string, unknown>, specPath: s
             const group = (item ?? {}) as Record<string, unknown>;
             const devices = asStringArray(group.devices) ?? [];
             const file = asString(group.file)?.trim() ?? "";
-            const encrypt = group.encrypt === true;
+            // 默认加密：只有明确写 false 才上传明文包。
+            const encrypt = group.encrypt !== false;
             const keep = group.keep === true;
             if (group.encrypt !== undefined && typeof group.encrypt !== "boolean") {
                 problems.push(`downloads[${index}].encrypt 必须是 true 或 false`);
@@ -252,6 +263,11 @@ export function parseSpec(dir: string, raw: Record<string, unknown>, specPath: s
     const paidTypeRaw = asString(raw.paidType)?.trim() ?? "";
     if (!(PAID_TYPES as readonly string[]).includes(paidTypeRaw)) {
         problems.push(`paidType 只能是 ${PAID_TYPES.filter(Boolean).join(" / ")} 或留空`);
+    }
+
+    // 付费类型由创作者决定：配置了付费映射就必须明确选 paid 或 force_paid，不替创作者默认。
+    if (pricing && paidTypeRaw !== "paid" && paidTypeRaw !== "force_paid") {
+        problems.push(PAID_TYPE_CHOICE_HINT);
     }
 
     if (raw.allowFreeEncryption !== undefined && typeof raw.allowFreeEncryption !== "boolean") {

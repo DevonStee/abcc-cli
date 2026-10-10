@@ -109,7 +109,7 @@ describe("更新：版本写进包体", () => {
   const spec = baseSpec({
     id: ID,
     downloads: [
-      { devices: ["xmb10", "xmb10nfc", "xmb11", "xmb11nfc"], file: "band.bin", encrypt: false, changelog: "适配手环 9" },
+      { devices: ["xmb10", "xmb10nfc", "xmb11", "xmb11nfc"], file: "band.bin", encrypt: true, changelog: "适配手环 9" },
       { devices: ["xmb9"], file: "band9.bin", encrypt: false },
     ],
   });
@@ -210,6 +210,7 @@ describe("付费必须加密", () => {
   test("配置了 pricing 的设备未加密时报错", async () => {
     const dir = files(
       baseSpec({
+        paidType: "force_paid",
         downloads: [{ devices: ["xmb10"], file: "band.bin", encrypt: false }],
         pricing: { afdian: ["https://afdian.com/item/x?plan_id=p&sku=[{\"sku_id\":\"s\"}]"], devices: "all" },
       }),
@@ -218,7 +219,7 @@ describe("付费必须加密", () => {
   });
 
   test("paidType 为 paid 时所有设备都要加密", async () => {
-    const dir = files(baseSpec({ paidType: "paid", downloads: [{ devices: ["xmb10"], file: "band.bin" }] }));
+    const dir = files(baseSpec({ paidType: "paid", downloads: [{ devices: ["xmb10"], file: "band.bin", encrypt: false }] }));
     expect((await buildPlan(loadSpec(dir))).problems.join()).toContain("xmb10");
   });
 
@@ -229,5 +230,78 @@ describe("付费必须加密", () => {
     expect((await buildPlan(loadSpec(encrypted))).problems.join()).not.toContain("付费表盘必须加密");
     const plain = files(baseSpec());
     expect((await buildPlan(loadSpec(plain))).problems.join()).not.toContain("付费表盘必须加密");
+  });
+});
+
+describe("默认加密与付费类型", () => {
+  const PRICING = { afdian: ["https://afdian.com/item/x?plan_id=p&sku=[{\"sku_id\":\"s\"}]"], devices: "all" };
+  const problemsOf = async (spec: object) => (await buildPlan(loadSpec(makeResourceDir(baseFiles(spec))))).problems.join("\n");
+
+  test("encrypt 不写默认加密，明确写 false 才不加密", () => {
+    const dir = makeResourceDir(
+      baseFiles(
+        baseSpec({
+          allowFreeEncryption: true,
+          downloads: [
+            { devices: ["xmb10"], file: "band.bin" },
+            { devices: ["xmb11"], file: "band.bin", encrypt: false },
+          ],
+        }),
+      ),
+    );
+    const groups = loadSpec(dir).spec.downloads;
+    expect(groups.map((group) => group.encrypt)).toEqual([true, false]);
+  });
+
+  test("配置了 pricing 必须明确选 paid 或 force_paid", async () => {
+    for (const paidType of [undefined, "", "free"]) {
+      const dir = makeResourceDir(baseFiles(baseSpec({ paidType, downloads: [{ devices: ["xmb10"], file: "band.bin" }], pricing: PRICING })));
+      expect(() => loadSpec(dir)).toThrow(/force_paid/);
+    }
+    for (const paidType of ["paid", "force_paid"]) {
+      expect(await problemsOf(baseSpec({ paidType, downloads: [{ devices: ["xmb10"], file: "band.bin" }], pricing: PRICING }))).toBe("");
+    }
+  });
+
+  test("新建付费表盘没有 pricing 时报错", async () => {
+    expect(await problemsOf(baseSpec({ paidType: "force_paid", downloads: [{ devices: ["xmb10"], file: "band.bin" }] }))).toContain(
+      "没有配置 pricing",
+    );
+  });
+
+  const paidBaseline = (): PublishedBaseline => ({ ...dotMatrixBaseline(), paidType: "paid" });
+  const paidUpdate = (spec: Record<string, unknown>) =>
+    buildPlan(
+      loadSpec(
+        makeResourceDir({
+          ...baseFiles(spec),
+          "band.bin": watchfaceBin({ id: ID, version: [0, 0, 0] }),
+          "band9.bin": watchfaceBin({ id: ID, version: [0, 0, 0], seed: 9 }),
+        }),
+      ),
+      paidBaseline(),
+    );
+  const paidDownloads = (band9Encrypt: boolean) => [
+    { devices: ["xmb10", "xmb10nfc", "xmb11", "xmb11nfc"], keep: true },
+    { devices: ["xmb9"], file: "band9.bin", encrypt: band9Encrypt },
+  ];
+
+  test("更新付费表盘：abcc.json 没写 paidType 时要求明确选择", async () => {
+    const plan = await paidUpdate(baseSpec({ id: ID, downloads: paidDownloads(true) }));
+    expect(plan.problems.join()).toContain("线上是付费表盘（paid）");
+  });
+
+  test("更新付费表盘：没写 pricing、新加的设备未加密也会被拦下", async () => {
+    const plan = await paidUpdate(baseSpec({ id: ID, paidType: "force_paid", downloads: paidDownloads(false) }));
+    expect(plan.problems.join()).toContain("付费表盘必须加密，以下设备未开启 encrypt：xmb9");
+    const ok = await paidUpdate(baseSpec({ id: ID, paidType: "force_paid", downloads: paidDownloads(true) }));
+    expect(ok.problems).toEqual([]);
+  });
+
+  test("线上已加密的设备，换包后不能退回明文（免费表盘也一样）", async () => {
+    const plan = await updatePlan(
+      baseSpec({ id: ID, downloads: [{ devices: ["xmb10", "xmb10nfc", "xmb11", "xmb11nfc"], file: "band.bin", encrypt: false }] }),
+    );
+    expect(plan.problems.join()).toContain("线上是加密的，新包也必须加密");
   });
 });

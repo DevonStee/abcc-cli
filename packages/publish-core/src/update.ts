@@ -31,7 +31,7 @@ import {
     updateSubmissionEntryOnBranch,
 } from "~/logic/publish/staging-submission";
 import { encryptedDownloadDevices } from "~/logic/publish/validation";
-import { buildPlanManifest, selectedDevices, type PublishedBaseline } from "./plan";
+import { buildPlanManifest, effectivePaidType, selectedDevices, type PublishedBaseline } from "./plan";
 import {
     applyWatchfaceId,
     commitUploads,
@@ -100,6 +100,7 @@ async function loadBaseline(entry: CatalogEntry, token: string, log: Logger) {
         })),
         links: manifest.links ?? [],
         encryptedDevices: new Set(fileKeys.map((item) => item.deviceId)),
+        paidType: entry.paid_type,
     };
     return { baseline, manifest, repo };
 }
@@ -286,7 +287,7 @@ export async function updateResource(
     });
 
     // 6. PR
-    const paidType = spec.specified.paidType ? spec.paidType : entry.paid_type;
+    const paidType = effectivePaidType(spec, baseline);
     if (current.submittedCommit !== commitSha) {
         if (openPr) {
             log(`  同步 PR #${openPr.prNumber} 分支并更新提交明细...`);
@@ -310,7 +311,7 @@ export async function updateResource(
                     new Set(devices.map((device) => device.vendor).filter(Boolean)),
                 ).join(";"),
                 devices: Array.from(new Set(devices.map((device) => device.id))).join(";"),
-                paid_type: paidType?.trim() ?? "",
+                paid_type: paidType.trim(),
             };
             await updateSubmissionEntryOnBranch({
                 token,

@@ -31,7 +31,9 @@ ${SPEC_FILE_NAME} 字段：
   cover        封面路径：宽高比 ${COVER_RATIO}（3:2，允许 ±${COVER_RATIO_TOLERANCE}），不超过 ${Math.round(COVER_MAX_BYTES / 1024)}KB。
   preview      预览图路径数组，至少 1 张。
   links        可选，[{ "title", "url"(https), "icon" }]。更新时不写则沿用线上。
-  downloads    按包分组：[{ "devices": ["xmb10", ...], "file": "band.bin", "encrypt": false }]
+  downloads    按包分组：[{ "devices": ["xmb10", ...], "file": "band.bin", "encrypt": true }]
+               - encrypt 不写默认加密；只有明确写 false 才上传明文包。
+               - 更新时，线上已加密的设备换包后必须继续加密。
                - 只支持 ${SUPPORTED_PACKAGE_EXTENSIONS.join(" / ")}（小米表盘）。
                - 设备 ID 以正式仓库 devices_v2.json 为准；每台设备只能出现在一组里。
                - 哪个包配哪些设备由创作者决定，CLI 不判断包与设备是否匹配。
@@ -43,12 +45,18 @@ ${SPEC_FILE_NAME} 字段：
                version 时，CLI 把「线上版本末位 +1」写进包体（1.0.1 → 1.0.2），再从包体读回。
   pricing      可选，爱发电付费映射：{ "afdian": ["<爱发电购买链接>"], "devices": "all" }
                - 链接需包含 plan_id 与 sku 参数；顺序即购买入口顺序，第一条是客户端里的购买按钮。
-               - 任何一组 encrypt 为 true 时必须配置 pricing，否则密钥会被当作免费资源发放。
-               - 付费表盘必须加密：pricing 覆盖的设备（paidType 为 paid / force_paid 时为全部设备）
-                 都要 encrypt: true。免费表盘可以加密（配 allowFreeEncryption），也可以不加密。
+               - 新建时有加密的组必须配置 pricing 或 allowFreeEncryption，否则密钥会被当作免费资源发放。
+               - 配置了 pricing 必须明确写 paidType（paid 或 force_paid）。
+               - 付费表盘必须加密：pricing 覆盖的设备（付费类型为 paid / force_paid 时为全部设备）
+                 都要加密。免费表盘可以加密（配 allowFreeEncryption），也可以写 encrypt: false 不加密。
   allowFreeEncryption  可选，true 表示「加密但免费」：包体在仓库里是密文，只能通过 AstroBox
                安装，密钥向所有用户免费发放。与 pricing 二选一。
-  paidType     可选："paid" / "force_paid" / "free" 或留空。更新时不写则沿用目录里的值。
+  paidType     "free" / "paid" / "force_paid" 或留空（免费）：
+               - free       免费：可直接使用。
+               - paid       付费：可先体验部分功能，购买后解锁完整功能。
+               - force_paid 强制付费：不购买则无法使用。
+               付费表盘（新建或更新）必须明确写 paid 或 force_paid，由创作者选择，CLI 不默认；
+               免费表盘更新时不写则沿用线上。
   prBody       可选，PR 描述。
 
 不需要填写：author（由登录的 AstroBox 账号决定）、仓库名（astrobox-resource-<id>）。

@@ -6,7 +6,9 @@
  * - 资源仓库沿用原仓库，commit message 为 `update: <名称>`（upsertManifestAndAssets）。
  * - 该资源已有自己开着的 PR 时，在原 PR 分支上更新提交明细（GUI 的 in_progress 模式）；
  *   否则新建 `[ABCC] Update resource: <名称>`，request.json 为 mode=edit。
- * - 每次推送都登记一次新版本选项（清空评分 / 折叠评论），两项都不选即撤销。
+ * - 新版本选项（清空评分 / 折叠评论）记在进度文件里，重跑时没带参数也沿用上次的选择，
+ *   每次推送新 commit 都按这份选择重新登记；要撤销用 clearVersionOptions。
+ * - abcc.json 没写到的线上设备会从 manifest 移除，必须用 allowRemove 明确同意。
  */
 import type { RepoEnvId } from "~/config/repoEnv";
 import { registerVersionResetIntent } from "~/api/astrobox/resource";
@@ -38,6 +40,7 @@ import {
     contentFingerprint,
     describePackages,
     encryptAssets,
+    assertPaidMappings,
     ensurePaidProtection,
     preparePlan,
     prepareUploads,
@@ -58,10 +61,28 @@ export interface UpdateOptions {
     env: RepoEnvId;
     dryRun: boolean;
     log: Logger;
-    /** 新版本上线后清空资源评分。 */
+    /** 新版本上线后清空资源评分。不传则沿用本次更新上一次运行的选择。 */
     resetRatings?: boolean;
-    /** 新版本上线后折叠既往的全部评论。 */
+    /** 新版本上线后折叠既往的全部评论。不传则沿用本次更新上一次运行的选择。 */
     foldComments?: boolean;
+    /** 撤销已选的清空评分 / 折叠评论。 */
+    clearVersionOptions?: boolean;
+    /** 允许把 abcc.json 没写到的线上设备从 manifest 移除。 */
+    allowRemove?: boolean;
+}
+
+interface VersionOptions {
+    resetRatings: boolean;
+    foldComments: boolean;
+}
+
+/** 本次运行要登记的新版本选项：命令行指定的优先，否则沿用进度文件里的。 */
+function resolveVersionOptions(options: UpdateOptions, saved: UpdateState | null): VersionOptions {
+    if (options.clearVersionOptions) return { resetRatings: false, foldComments: false };
+    return {
+        resetRatings: options.resetRatings ?? saved?.versionOptions?.resetRatings ?? false,
+        foldComments: options.foldComments ?? saved?.versionOptions?.foldComments ?? false,
+    };
 }
 
 export interface UpdateResult {
@@ -165,6 +186,13 @@ export async function updateResource(
     const removed = Object.keys(baseline.downloads).filter(
         (device) => !plan.downloadRows.some((row) => row.platformId === device),
     );
+    if (removed.length > 0 && !options.allowRemove) {
+        throw new Error(
+            `abcc.json 没有写线上已有的设备：${removed.join(", ")}，继续会把它们从线上移除。\n` +
+                '  要保留：在 downloads 里加一组 { "devices": [...], "keep": true }（沿用线上包体）或给新包；\n' +
+                "  确实要移除：加 --allow-remove 重新运行。",
+        );
+    }
 
     const openPr = await findOwnOpenSubmission(token, id, github.username);
     const manifest = buildPlanManifest(plan, id, astrobox.username);
@@ -178,13 +206,22 @@ export async function updateResource(
         })),
     );
     const title = `[ABCC] Update resource: ${spec.name}`;
+    const keyScope = `${id}-update`;
+    const saved = loadUpdateState(loaded.dir);
+    const sameCycle =
+        saved && saved.env === env && saved.id === id && saved.baseCommit === entry.repo_commit_hash ? saved : null;
+    const versionOptions = resolveVersionOptions(options, sameCycle);
 
     if (dryRun) {
         log(`  仓库：${baseRepo.owner}/${baseRepo.name}（沿用）`);
         describePackages(plan, log);
-        if (removed.length > 0) log(`  将从 manifest 移除的设备：${removed.join(", ")}`);
+        if (removed.length > 0) log(`  将从 manifest 移除的设备（--allow-remove）：${removed.join(", ")}`);
         if (spec.pricing) {
             log(`  爱发电映射：${spec.pricing.afdian.length} 条链接 → ${pricingDevices(spec).join(", ")}`);
+        } else if (encryptedDevices.length > 0 && !spec.allowFreeEncryption) {
+            // abcc.json 没写购买链接时，加密设备靠服务端已有的付费映射保护；只读查询，预演就能发现缺失。
+            await assertPaidMappings(id, encryptedDevices);
+            log(`  付费映射：服务端已配置（${encryptedDevices.join(", ")}）`);
         }
         log(
             openPr
@@ -192,7 +229,10 @@ export async function updateResource(
                 : `  PR 标题：${title}`,
         );
         log(
-            `  新版本选项：清空评分 ${options.resetRatings ? "是" : "否"}，折叠评论 ${options.foldComments ? "是" : "否"}`,
+            `  新版本选项：清空评分 ${versionOptions.resetRatings ? "是" : "否"}，折叠评论 ${versionOptions.foldComments ? "是" : "否"}` +
+                (options.resetRatings === undefined && options.foldComments === undefined && sameCycle?.versionOptions
+                    ? "（沿用上次运行的选择）"
+                    : ""),
         );
         log("  manifest_v2.json：");
         log(manifest.manifestJson.split("\n").map((line) => `    ${line}`).join("\n"));
@@ -201,12 +241,9 @@ export async function updateResource(
     }
 
     // 2. 本地进度：基准变了（上一版已合并）或环境不同就作废
-    const keyScope = `${id}-update`;
-    const saved = loadUpdateState(loaded.dir);
-    const current: UpdateState =
-        saved && saved.env === env && saved.id === id && saved.baseCommit === entry.repo_commit_hash
-            ? saved
-            : { version: 1, env, id, baseCommit: entry.repo_commit_hash };
+    const current: UpdateState = sameCycle ?? { version: 1, env, id, baseCommit: entry.repo_commit_hash };
+    // 先记下本次的新版本选项，中途失败后重跑不带参数也不会丢
+    current.versionOptions = { ...versionOptions, registeredCommit: current.versionOptions?.registeredCommit };
     const repo = toMainResourceRepo({
         owner: baseRepo.owner,
         name: baseRepo.name,
@@ -351,16 +388,20 @@ export async function updateResource(
         saveUpdateState(loaded.dir, current);
     }
 
-    // 7. 新版本选项：每次推送都登记，绑定这次会上线的 commit；失败不影响已提交的 PR
-    try {
-        await registerVersionResetIntent({
-            id,
-            commitSha,
-            resetRatings: Boolean(options.resetRatings),
-            foldComments: Boolean(options.foldComments),
-        });
-    } catch (error) {
-        log(`  （登记新版本选项失败：${(error as Error).message}。PR 已提交，重新运行即可重试）`);
+    // 7. 新版本选项：绑定这次会上线的 commit；commit 或选择变了才重新登记，失败不影响已提交的 PR
+    const optionsGiven =
+        options.clearVersionOptions || options.resetRatings !== undefined || options.foldComments !== undefined;
+    if (current.versionOptions.registeredCommit !== commitSha || optionsGiven) {
+        try {
+            await registerVersionResetIntent({ id, commitSha, ...versionOptions });
+            current.versionOptions = { ...versionOptions, registeredCommit: commitSha };
+            saveUpdateState(loaded.dir, current);
+            log(
+                `  新版本选项：清空评分 ${versionOptions.resetRatings ? "是" : "否"}，折叠评论 ${versionOptions.foldComments ? "是" : "否"}`,
+            );
+        } catch (error) {
+            log(`  （登记新版本选项失败：${(error as Error).message}。PR 已提交，重新运行即可重试）`);
+        }
     }
 
     log(`  PR：${current.pr?.url ?? "-"}`);

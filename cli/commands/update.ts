@@ -10,6 +10,8 @@ export async function runUpdate(
         yes?: boolean;
         "reset-ratings"?: boolean;
         "fold-comments"?: boolean;
+        "clear-version-options"?: boolean;
+        "allow-remove"?: boolean;
     },
 ) {
     const env = parseEnv(flags.env);
@@ -24,8 +26,11 @@ export async function runUpdate(
                 env,
                 dryRun,
                 log,
-                resetRatings: Boolean(flags["reset-ratings"]),
-                foldComments: Boolean(flags["fold-comments"]),
+                // 没带参数时传 undefined，沿用本次更新上一次运行的选择
+                resetRatings: flags["reset-ratings"] ? true : undefined,
+                foldComments: flags["fold-comments"] ? true : undefined,
+                clearVersionOptions: Boolean(flags["clear-version-options"]),
+                allowRemove: Boolean(flags["allow-remove"]),
             });
         } catch (error) {
             failed += 1;

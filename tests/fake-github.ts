@@ -252,6 +252,8 @@ export class FakeGithub {
       const ref = url.searchParams.get("ref") ?? "main";
       const bytes = this.file(owner, name, ref, path);
       if (!bytes) return notFound();
+      const accept = new Headers(init?.headers).get("Accept") ?? "";
+      if (accept.includes("application/vnd.github.raw")) return new Response(bytes as BlobPart, { status: 200 });
       const sha = this.resolveRef(owner, name, ref)!;
       return json({ path, sha: this.trees.get(this.commits.get(sha)!.tree)!.get(path), encoding: "base64", content: Buffer.from(bytes).toString("base64") });
     }

@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { PACKAGE_SPEC_TEXT } from "@abcc/publish-core";
 import { runAuth } from "./commands/auth";
+import { runKeys } from "./commands/keys";
 import { runPublish } from "./commands/publish";
 import { runStatus } from "./commands/status";
 import { runUpdate } from "./commands/update";
@@ -29,7 +30,11 @@ const USAGE = `用法：
       --yes                              跳过身份确认
       --reset-ratings                    （update）新版本上线后清空资源评分
       --fold-comments                    （update）新版本上线后折叠既往评论
+                                         （两项选过后重跑不带也会沿用，直到这次更新合并）
+      --clear-version-options            （update）撤销已选的清空评分 / 折叠评论
+      --allow-remove                     （update）允许移除 abcc.json 没写到的线上设备
   abcc status <目录...>                  查看各资源的 PR 审核状态
+  abcc keys prune [资源ID...] [--yes]    清理已被替换的加密密钥记录（默认只列出；--env 同上）
 `;
 
 async function main() {
@@ -44,6 +49,8 @@ async function main() {
             password: { type: "boolean" },
             "reset-ratings": { type: "boolean" },
             "fold-comments": { type: "boolean" },
+            "clear-version-options": { type: "boolean" },
+            "allow-remove": { type: "boolean" },
             help: { type: "boolean", short: "h" },
         },
     });
@@ -72,6 +79,8 @@ async function main() {
         case "update":
             requireDirs();
             return (await runUpdate(dirs, values)) > 0 ? 1 : 0;
+        case "keys":
+            return runKeys(rest, values);
         case "status":
             requireDirs();
             await runStatus(dirs);

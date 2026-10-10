@@ -80,11 +80,28 @@ AstroBox 登录需要占用 6767 端口，请先关闭本机占用该端口的 A
   - 末位已到 255 时不自动进位，要求手动写 `version`。
   新增的设备没有线上版本，按包体版本走。原文件不会被修改。
 - `"keep": true` 的组沿用线上包体（不写 `file`），不上传、不改版本。
+- **不会悄悄删设备**：线上有、abcc.json 没写到的设备，默认中止（预演也会报错）。要保留就加 `"keep": true` 的组，确实要移除加 `--allow-remove`。
+- **新版本选项会记住**：`--reset-ratings` / `--fold-comments` 选过后记在进度文件里，中断后重跑不带参数也沿用，直到这次更新合并；撤销用 `--clear-version-options`。
+- **预演检查付费映射**：abcc.json 没写 `pricing` 时，预演会只读查询服务端，确认加密设备都有付费映射。
 - **加密只进不退**：线上已加密的设备，换包后必须继续加密。付费表盘更新时必须重新写明 `paidType`；「付费必须加密」按最终提交的付费类型检查（没写 `pricing` 也算）。
 - 资源仓库沿用原仓库，单次提交 `update: <名称>`；加密包体用新密钥加密并按新 commit 上报。
 - 该资源已有**自己开着的 PR** 时，在原 PR 分支上更新 `resource.csv` / `request.json`（GUI 的「继续编辑」）；否则新建 `[ABCC] Update resource: <名称>`，`request.json` 为 `mode: edit`。别人开着的 PR 会直接拦下。
 - 加密设备在更新仓库前用 `checkUnpaidEncryption` 复核付费映射，未配置时中止。
-- `--reset-ratings` / `--fold-comments`：新版本上线后清空评分 / 折叠评论。每次推送都会登记一次，都不选即撤销之前的登记。
+- `--reset-ratings` / `--fold-comments`：新版本上线后清空评分 / 折叠评论。选过后重跑会沿用，每次推送新提交都按这份选择重新登记；`--clear-version-options` 撤销。
+
+## 清理旧密钥记录（abcc keys prune）
+
+每次推送都会给每台设备新登记一条「密文哈希 + 密钥」，服务端不删旧的（GUI 也一样）。App 只用与线上密文一致的那条。
+
+```sh
+abcc keys prune --env official            # 只列出可删的旧记录
+abcc keys prune --env official --yes      # 删除
+abcc keys prune 979812217215 --env official   # 只处理指定资源
+```
+
+- 按运行当时的线上版本判断：只删哈希与线上密文不一致的记录，每台设备当前在用的那条一定保留；找不到在用那条的设备不动。
+- 有进行中 PR 的资源整个跳过（未合并时新密钥还没上线，会被误判为旧记录）。
+- 删除前对每个资源重新读取一次线上状态。删除不能恢复。
 
 进度写在资源目录的 `.abcc-update-state.json`，只作缓存：线上 commit 变了（上一版已合并）或资源仓库 HEAD 被别处推过，就以远端为准重新执行。
 

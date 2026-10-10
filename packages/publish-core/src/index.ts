@@ -41,8 +41,9 @@ export {
     type VersionDecision,
     type VersionTarget,
 } from "./version";
-export { preparePlan, type Logger } from "./pipeline";
+export { preparePlan, requireAccounts, type Logger } from "./pipeline";
 export { publishResource, type PublishOptions, type PublishResult } from "./publish";
 export { updateResource, type UpdateOptions, type UpdateResult } from "./update";
 export { resourceStatus, type ResourceStatus } from "./status";
+export { planKeyPrune, pruneKeys, type ResourceKeyPlan, type StaleKey } from "./keys";
 export { loadState, loadUpdateState, STATE_FILE_NAME, UPDATE_STATE_FILE_NAME } from "./state";

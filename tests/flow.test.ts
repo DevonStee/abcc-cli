@@ -25,6 +25,10 @@ const SUBMISSION_DIR = `tmp/${LOGIN}/${REPO}`;
 
 const cryptoReports: Array<{ deviceId: string; hash: string; key: string; commitSha: string }> = [];
 const versionResets: Array<{ id: string; commitSha: string; resetRatings: boolean; foldComments: boolean }> = [];
+let registerFailures = 0;
+type FileKey = { resourceId: string; deviceId: string; encryptedFileHash: string; createdAt: string; updatedAt: string };
+let fileKeys: FileKey[] = [];
+const deletedKeys: Array<{ resourceId: string; deviceId: string; encryptedFileHash: string }> = [];
 let skus: Array<{ resourceId: string; deviceId: string; isPaid: boolean; validationStatus: string }> = [];
 
 mock.module("../vendor/AstroBoxCreatorConsole/app/api/astrobox/resource", () => ({
@@ -34,19 +38,34 @@ mock.module("../vendor/AstroBoxCreatorConsole/app/api/astrobox/resource", () => 
     return {};
   },
   registerVersionResetIntent: async (body: (typeof versionResets)[number]) => {
+    if (registerFailures > 0) {
+      registerFailures -= 1;
+      throw new Error("network down");
+    }
     versionResets.push(body);
     return { pending: true };
   },
 }));
 mock.module("../vendor/AstroBoxCreatorConsole/app/api/astrobox/order", () => ({
   ...realOrder,
-  listSellerResourceFileKeys: async () => [],
+  listSellerResourceFileKeys: async ({ resourceId }: { resourceId: string }) =>
+    fileKeys.filter((key) => key.resourceId === resourceId),
+  deleteSellerResourceFileKey: async (body: { resourceId: string; deviceId: string; encryptedFileHash: string }) => {
+    deletedKeys.push(body);
+    fileKeys = fileKeys.filter(
+      (key) => !(key.resourceId === body.resourceId && key.deviceId === body.deviceId && key.encryptedFileHash === body.encryptedFileHash),
+    );
+    return { deleted: true };
+  },
   listSellerResourceConfigs: async () => ({ products: [], skus }),
   listExternalAuthorizations: async () => ({ configs: [] }),
 }));
 
 const { updateResource } = await import("@abcc/publish-core/update");
+type UpdateOptions = import("@abcc/publish-core/update").UpdateOptions;
 const { publishResource } = await import("@abcc/publish-core/publish");
+const { planKeyPrune, pruneKeys } = await import("@abcc/publish-core/keys");
+const { sha256Hex } = await import("@abcc/publish-core/crypto");
 const { setClientInfoProvider } = await import("../vendor/AstroBoxCreatorConsole/app/logic/publish/submission-protocol");
 const { loadRepoEnvId, saveRepoEnvId } = await import("../vendor/AstroBoxCreatorConsole/app/config/repoEnv");
 const { saveAccountState } = await import("../vendor/AstroBoxCreatorConsole/app/logic/account/store");
@@ -131,8 +150,8 @@ function localResource(overrides: Record<string, unknown> = {}) {
   });
 }
 
-function run(dir: string, logs: string[] = []) {
-  return updateResource(loadSpec(dir), { env: "testenv", dryRun: false, log: (line) => logs.push(line) });
+function run(dir: string, logs: string[] = [], extra: Partial<UpdateOptions> = {}) {
+  return updateResource(loadSpec(dir), { env: "testenv", dryRun: false, log: (line) => logs.push(line), ...extra });
 }
 
 function manifestAt(ref = "main") {
@@ -158,6 +177,9 @@ beforeEach(() => {
   process.env.ABCC_CONFIG_DIR = configDir;
   cryptoReports.length = 0;
   versionResets.length = 0;
+  registerFailures = 0;
+  fileKeys = [];
+  deletedKeys.length = 0;
   skus = [];
   seed();
   globalThis.fetch = github.fetch as typeof fetch;
@@ -328,6 +350,114 @@ describe("abcc update：写入前的拦截", () => {
 
   test("目录里没有该资源：提示用 publish", async () => {
     await expect(run(localResource({ id: "979800000009" }))).rejects.toThrow("abcc publish");
+  });
+});
+
+describe("abcc update：防误操作", () => {
+  test("abcc.json 漏写线上设备：预演和正式运行都中止，加 --allow-remove 才移除", async () => {
+    const dir = localResource({
+      downloads: [{ devices: ["xmb10", "xmb10nfc", "xmb9"], file: "band.bin", encrypt: true }],
+    });
+    await expect(run(dir, [], { dryRun: true })).rejects.toThrow("xmb11nfc");
+    await expect(run(dir)).rejects.toThrow("--allow-remove");
+    expect(github.writes()).toHaveLength(0);
+    await run(dir, [], { allowRemove: true });
+    expect(Object.keys(manifestAt().downloads).sort()).toEqual(["xmb10", "xmb10nfc", "xmb9"]);
+  });
+
+  test("keep 保留原设备时不需要 --allow-remove", async () => {
+    const dir = localResource({
+      downloads: [
+        { devices: ["xmb10", "xmb10nfc", "xmb11nfc"], keep: true },
+        { devices: ["xmb9"], file: "band9.bin", encrypt: true },
+      ],
+    });
+    await run(dir);
+    expect(Object.keys(manifestAt().downloads).sort()).toEqual(["xmb10", "xmb10nfc", "xmb11nfc", "xmb9"]);
+  });
+
+  test("清空评分 / 折叠评论：中断后重跑不带参数也沿用，不会被撤销", async () => {
+    const dir = localResource();
+    await run(dir, [], { dryRun: true, resetRatings: true });
+    // 第一次正式运行带参数，但在登记前失败（模拟中断）：选择已记进进度文件
+    const reset = registerFailures;
+    registerFailures = 1;
+    await run(dir, [], { resetRatings: true, foldComments: true });
+    expect(versionResets).toHaveLength(0);
+    registerFailures = reset;
+    // 重跑忘了带参数：仍按上次的选择登记
+    await run(dir);
+    const head = github.head(LOGIN, REPO)!;
+    expect(versionResets).toEqual([{ id: ID, commitSha: head, resetRatings: true, foldComments: true }]);
+    // 再跑一次：commit 没变，不重复登记
+    await run(dir);
+    expect(versionResets).toHaveLength(1);
+    // 明确撤销
+    await run(dir, [], { clearVersionOptions: true });
+    expect(versionResets.at(-1)).toEqual({ id: ID, commitSha: head, resetRatings: false, foldComments: false });
+  });
+
+  test("预演就能发现加密设备缺少付费映射（abcc.json 没写 pricing）", async () => {
+    const logs: string[] = [];
+    await expect(run(localResource({ allowFreeEncryption: false }), logs, { dryRun: true })).rejects.toThrow(
+      "没有付费映射",
+    );
+    skus = ["xmb9", "xmb10", "xmb10nfc", "xmb11nfc"].map((deviceId) => ({
+      resourceId: ID,
+      deviceId,
+      isPaid: true,
+      validationStatus: "active",
+    }));
+    await run(localResource({ allowFreeEncryption: false }), logs, { dryRun: true });
+    expect(logs.join("\n")).toContain("付费映射：服务端已配置");
+    expect(github.writes()).toHaveLength(0);
+  });
+});
+
+describe("abcc keys prune：清理旧密钥记录", () => {
+  const key = (deviceId: string, hash: string): FileKey => ({
+    resourceId: ID,
+    deviceId,
+    encryptedFileHash: hash,
+    createdAt: "2026-10-09T00:00:00Z",
+    updatedAt: "2026-10-09T00:00:00Z",
+  });
+  const liveHash = () => sha256Hex(github.file(LOGIN, REPO, "main", "downloads/band.bin")!);
+
+  test("只删与线上密文不一致的记录，每台设备保留在用的那条", async () => {
+    const live = liveHash();
+    fileKeys = [key("xmb10", live), key("xmb10", "old1"), key("xmb10", "old2"), key("xmb10nfc", live), key("xmb10nfc", "old3")];
+    const plans = await planKeyPrune({ token: "gh-token", login: LOGIN });
+    expect(plans).toHaveLength(1);
+    expect(plans[0].stale.map((item) => item.encryptedFileHash).sort()).toEqual(["old1", "old2", "old3"]);
+    expect(plans[0].kept).toBe(2);
+    expect(deletedKeys).toHaveLength(0); // 列出不删
+
+    const deleted = await pruneKeys({ token: "gh-token", login: LOGIN, ids: [ID], log: () => {} });
+    expect(deleted).toBe(3);
+    expect(fileKeys.map((item) => `${item.deviceId}:${item.encryptedFileHash}`).sort()).toEqual([`xmb10:${live}`, `xmb10nfc:${live}`]);
+  });
+
+  test("某台设备找不到在用的那条时，不动它的任何记录", async () => {
+    fileKeys = [key("xmb10", "a"), key("xmb10", "b")];
+    const [plan] = await planKeyPrune({ token: "gh-token", login: LOGIN });
+    expect(plan.stale).toHaveLength(0);
+  });
+
+  test("有进行中的 PR 时整个资源跳过", async () => {
+    // 线上版本的密钥 + 推一次更新后留下进行中的 PR，新密钥还没上线（按哈希会被误判为旧记录）
+    const live = liveHash();
+    await run(localResource());
+    const pull = github.pulls.at(-1)!;
+    expect(pull.state).toBe("open");
+    fileKeys = [
+      key("xmb10", live),
+      ...cryptoReports.filter((report) => report.deviceId === "xmb10").map((report) => key(report.deviceId, report.hash)),
+    ];
+    const [plan] = await planKeyPrune({ token: "gh-token", login: LOGIN });
+    expect(plan.skipped).toContain(`#${pull.number}`);
+    expect(plan.stale).toHaveLength(0);
+    expect(await pruneKeys({ token: "gh-token", login: LOGIN, ids: [ID], log: () => {} })).toBe(0);
   });
 });
 

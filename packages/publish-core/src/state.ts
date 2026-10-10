@@ -72,6 +72,8 @@ export interface UpdateState {
     cryptoReported?: string[];
     /** 已把哪个 repoCommit 写进 PR 分支。 */
     submittedCommit?: string;
+    /** 新版本选项（清空评分 / 折叠评论）；registeredCommit 为已向服务端登记的 commit。 */
+    versionOptions?: { resetRatings: boolean; foldComments: boolean; registeredCommit?: string };
     pr?: { number: number; url: string };
     updatedAt?: string;
 }

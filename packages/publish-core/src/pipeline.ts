@@ -312,6 +312,14 @@ export async function ensurePaidProtection(params: {
         log("  加密但免费（allowFreeEncryption）：密钥将向所有 AstroBox 用户免费发放");
         return;
     }
+    await assertPaidMappings(id, encryptedDevices);
+}
+
+/**
+ * 用 GUI 同一个 checkUnpaidEncryption 复核加密设备在服务端都有付费映射。
+ * 只读查询，预演也可以调用。
+ */
+export async function assertPaidMappings(id: string, encryptedDevices: string[]) {
     const check = await checkUnpaidEncryption(id, encryptedDevices);
     if (check.status !== "ok") {
         throw new Error(
